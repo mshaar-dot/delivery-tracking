@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تتبع السائق</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#f0f2f5;min-height:100vh}
+.top{background:#25D366;color:#fff;padding:20px;text-align:center}
+.top h2{font-size:18px;margin-bottom:4px}
+.top p{font-size:13px;opacity:.85}
+.card{background:#fff;margin:16px;border-radius:16px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.status{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.dot{width:14px;height:14px;border-radius:50%;flex-shrink:0}
+.dot.on{background:#25D366;animation:pulse 1.5s infinite}
+.dot.off{background:#ccc}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.3);opacity:.7}}
+.status p{font-size:16px;font-weight:600}
+.info{font-size:14px;color:#666;line-height:1.8}
+.btn{display:block;width:100%;padding:16px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;margin-top:16px;transition:all .2s}
+.btn-start{background:#25D366;color:#fff}
+.btn-start:active{background:#1ea855}
+.btn-stop{background:#e74c3c;color:#fff}
+.btn-stop:active{background:#c0392b}
+.counter{text-align:center;font-size:13px;color:#999;margin-top:12px}
+#map{height:200px;border-radius:12px;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="top">
+<h2>تتبع الموقع</h2>
+<p>موقعك يُرسل تلقائياً للعميل</p>
+</div>
+<div class="card">
+<div class="status">
+<div class="dot" id="dot"></div>
+<p id="statusText">اضغط الزر لبدء مشاركة موقعك</p>
+</div>
+<div class="info" id="info"></div>
+<div id="mapContainer"></div>
+<button class="btn btn-start" id="mainBtn" onclick="toggleTracking()">بدء مشاركة الموقع</button>
+<div class="counter" id="counter"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+var API = 'https://ydclqgywmmuwsdkxzhxu.supabase.co/functions/v1/mini-app?action=update_location';
+var params = new URLSearchParams(window.location.search);
+var driverId = params.get('did') || '';
+var tracking = false, watchId = null, sendCount = 0, myMap = null, myMarker = null;
+var lastLat = null, lastLng = null;
+
+if (window.Telegram && Telegram.WebApp) {
+  Telegram.WebApp.ready();
+  Telegram.WebApp.expand();
+}
+
+function toggleTracking() {
+  if (tracking) stopTracking();
+  else startTracking();
+}
+
+function startTracking() {
+  if (!navigator.geolocation) {
+    document.getElementById('statusText').textContent = 'المتصفح لا يدعم تحديد الموقع';
+    return;
+  }
+  tracking = true;
+  document.getElementById('dot').className = 'dot on';
+  document.getElementById('statusText').textContent = 'جاري مشاركة موقعك...';
+  document.getElementById('mainBtn').textContent = 'إيقاف المشاركة';
+  document.getElementById('mainBtn').className = 'btn btn-stop';
+
+  if (!myMap) {
+    document.getElementById('mapContainer').innerHTML = '<div id="map"></div>';
+    myMap = L.map('map').setView([31.95, 35.93], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(myMap);
+  }
+
+  // watchPosition only - asks permission ONCE then keeps tracking
+  watchId = navigator.geolocation.watchPosition(
+    function(pos) {
+      lastLat = pos.coords.latitude;
+      lastLng = pos.coords.longitude;
+      if (myMarker) myMarker.setLatLng([lastLat, lastLng]);
+      else { myMarker = L.marker([lastLat, lastLng]).addTo(myMap); myMap.setView([lastLat, lastLng], 15); }
+      myMap.panTo([lastLat, lastLng]);
+      document.getElementById('info').textContent = 'موقعك: ' + lastLat.toFixed(5) + ', ' + lastLng.toFixed(5);
+    },
+    function(err) { document.getElementById('info').textContent = 'خطأ: ' + err.message; },
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+  );
+
+  // Send cached location to server every 10 seconds - NO new permission requests
+  window.sendInterval = setInterval(function() {
+    if (lastLat !== null && lastLng !== null && tracking) {
+      sendLocation(lastLat, lastLng);
+    }
+  }, 10000);
+
+  // First send after 2 seconds
+  setTimeout(function() {
+    if (lastLat !== null && lastLng !== null && tracking) {
+      sendLocation(lastLat, lastLng);
+    }
+  }, 2000);
+}
+
+function stopTracking() {
+  tracking = false;
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (window.sendInterval) { clearInterval(window.sendInterval); window.sendInterval = null; }
+  document.getElementById('dot').className = 'dot off';
+  document.getElementById('statusText').textContent = 'تم إيقاف المشاركة';
+  document.getElementById('mainBtn').textContent = 'بدء مشاركة الموقع';
+  document.getElementById('mainBtn').className = 'btn btn-start';
+}
+
+async function sendLocation(lat, lng) {
+  try {
+    await fetch(API, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ driver_telegram_id: parseInt(driverId), lat: lat, lng: lng })
+    });
+    sendCount++;
+    document.getElementById('counter').textContent = 'تم إرسال الموقع ' + sendCount + ' مرة';
+  } catch(e) {
+    document.getElementById('counter').textContent = 'خطأ في الإرسال';
+  }
+}
+</script>
+</body>
+</html>
