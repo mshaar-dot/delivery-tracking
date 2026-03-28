@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تتبع الطلب</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#f5f5f5}
+.hdr{background:#25D366;color:#fff;padding:16px;text-align:center;font-size:18px;font-weight:600}
+#map{height:55vh;width:100%}
+.inf{padding:16px}
+.c{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.c h3{font-size:14px;color:#888;margin-bottom:8px}
+.c p{font-size:16px;font-weight:500}
+.s{display:flex;gap:8px;align-items:center}
+.d{width:10px;height:10px;border-radius:50%}
+.d.on{background:#25D366;animation:pulse 1.5s infinite}
+.d.ok{background:#25D366}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.ld{text-align:center;padding:40px;color:#888}
+.err{text-align:center;padding:40px;color:#e74c3c}
+</style>
+</head>
+<body>
+<div class="hdr">تتبع الطلب</div>
+<div id="map"></div>
+<div class="inf" id="inf"><div class="ld">جاري التحميل...</div></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+var params = new URLSearchParams(window.location.search);
+var tid = params.get('tid') || '';
+var apiUrl = 'https://ydclqgywmmuwsdkxzhxu.supabase.co/functions/v1/mini-app?action=get_tracking&tid=' + tid;
+var myMap, driverMarker, markersList = [];
+var labels = {
+  pending_receiver_approval: 'بانتظار موافقة المستلم',
+  pending_price_approval: 'بانتظار الموافقة على السعر',
+  pending_driver_assignment: 'بانتظار سائق',
+  driver_assigned: 'تم تعيين سائق',
+  in_transit: 'جاري التوصيل',
+  delivered: 'تم التسليم',
+  receiver_rejected: 'رفض المستلم',
+  cancelled: 'ملغي'
+};
+
+if (!tid) {
+  document.getElementById('inf').innerHTML = '<div class="err">رابط التتبع غير صحيح</div>';
+} else { loadData(); }
+
+async function loadData() {
+  try {
+    var r = await fetch(apiUrl);
+    var j = await r.json();
+    if (j.error) { document.getElementById('inf').innerHTML = '<div class="c"><p>الطلب غير موجود</p></div>'; return; }
+    var o = j.order, dl = j.driver_location;
+    if (!myMap) {
+      myMap = L.map('map').setView([o.pickup_lat || 31.95, o.pickup_lng || 35.93], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(myMap);
+    }
+    markersList.forEach(function(m) { myMap.removeLayer(m); }); markersList = [];
+    if (o.pickup_lat) markersList.push(L.marker([o.pickup_lat, o.pickup_lng]).addTo(myMap).bindPopup('موقع الاستلام'));
+    if (o.dropoff_lat) markersList.push(L.marker([o.dropoff_lat, o.dropoff_lng]).addTo(myMap).bindPopup('موقع التسليم'));
+    if (dl) {
+      if (driverMarker) driverMarker.setLatLng([dl.lat, dl.lng]);
+      else driverMarker = L.marker([dl.lat, dl.lng], {icon: L.divIcon({html: '<div style="font-size:24px">🚗</div>', className: '', iconSize: [30, 30]})}).addTo(myMap);
+    }
+    var pts = [];
+    if (o.pickup_lat) pts.push([o.pickup_lat, o.pickup_lng]);
+    if (o.dropoff_lat) pts.push([o.dropoff_lat, o.dropoff_lng]);
+    if (dl) pts.push([dl.lat, dl.lng]);
+    if (pts.length > 1) myMap.fitBounds(pts, {padding: [30, 30]});
+    
+    document.getElementById('inf').innerHTML = 
+      '<div class="c"><h3>حالة الطلب #' + o.order_number + '</h3><div class="s"><div class="d ' + (o.status === 'delivered' ? 'ok' : 'on') + '"></div><p>' + (labels[o.status] || o.status) + '</p></div></div>' +
+      '<div class="c"><h3>التفاصيل</h3><p>من: ' + o.sender_name + ' ← ' + o.receiver_name + '</p><p style="color:#888;margin-top:4px">المسافة: ' + (o.distance_km || '-') + ' كم | التوصيل: ' + (o.delivery_fee || '-') + ' دينار</p></div>';
+    
+    if (o.status !== 'delivered' && o.status !== 'cancelled') setTimeout(loadData, 5000);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('inf').innerHTML = '<div class="err">خطأ في تحميل البيانات</div>';
+  }
+}
+</script>
+</body>
+</html>
